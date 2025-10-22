@@ -26,7 +26,8 @@ System packages you will typically need:
 
 ```bash
 sudo apt update
-sudo apt install -y python3-venv ffmpeg pulseaudio dbus-x11 xvfb xdotool x11vnc
+sudo apt install -y python3-venv ffmpeg pulseaudio dbus-x11 xvfb xdotool x11vnc \
+    openbox python3-xdg
 # Install a browser (pick one):
 sudo snap install chromium --classic  # or install Google Chrome from Google
 ```
@@ -90,6 +91,8 @@ pip install --upgrade openai-whisper
    ```
 
    Update `config.yaml`:
+   - Set `settings.pre_record_lead_seconds` to the number of seconds before the start
+     time that the pre-record hooks should run (for example `60` to join a minute early).
    - Set `settings.recorder.display` to `":99"` (or whichever display you created).
    - Set `settings.recorder.audio_source` to your PulseAudio monitor (for example
      `meetrecorder_sink.monitor`).
@@ -133,12 +136,15 @@ pip install --upgrade openai-whisper
 
 - `settings.recordings_dir` / `settings.transcripts_dir` – directories for output. Relative paths
   are resolved against the configuration file location.
+- `settings.pre_record_lead_seconds` – how many seconds before the scheduled start the
+  `pre_record` commands should run. Increase this if the browser needs more time to join.
 - `settings.recorder` – FFmpeg options. Important keys are `display`, `audio_source`,
   `video_size`, and `dry_run`.
 - `settings.transcription` – optional command to run after recording. Use `{input}` for the media
   path and `{output_dir}` for the transcript directory.
 - `meetings[*]` – each meeting includes title, URL, timezone-aware start time, duration, and
-  optional `pre_record`/`post_record` shell commands.
+  optional `pre_record`/`post_record` shell commands. Override `pre_record_lead_seconds` per
+  meeting if a specific call needs more (or less) warm-up time.
 
 See [`example.config.yaml`](example.config.yaml) for a complete sample.
 

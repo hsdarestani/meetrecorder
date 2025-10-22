@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Awaitable, Callable, Iterable, List, Optional
 
@@ -36,6 +36,7 @@ class SchedulerConfig:
     recorder: RecorderConfig
     logger: Logger
     transcription: Optional[TranscriptionConfig] = None
+    pre_record_lead_seconds: int = 0
 
 
 class MeetingScheduler:
@@ -86,12 +87,23 @@ class MeetingScheduler:
         if transcripts_dir:
             transcripts_dir.mkdir(parents=True, exist_ok=True)
 
-        wait_seconds = (
-            meeting.start_time.astimezone(timezone.utc) - datetime.now(timezone.utc)
-        ).total_seconds()
-        if wait_seconds > 0:
-            logger(f"Waiting {wait_seconds:.0f}s for meeting '{meeting.title}' to start...")
-            await asyncio.sleep(wait_seconds)
+        start_time_utc = meeting.start_time.astimezone(timezone.utc)
+        lead_seconds = meeting.pre_record_lead_seconds
+        if lead_seconds is None:
+            lead_seconds = max(self._config.pre_record_lead_seconds, 0)
+        else:
+            lead_seconds = max(lead_seconds, 0)
+
+        now_utc = datetime.now(timezone.utc)
+        pre_hook_start = start_time_utc - timedelta(seconds=lead_seconds)
+        if now_utc < pre_hook_start:
+            wait_before_hooks = (pre_hook_start - now_utc).total_seconds()
+            logger(
+                "Waiting {seconds:.0f}s before running pre-record hooks for '{title}'...".format(
+                    seconds=wait_before_hooks, title=meeting.title
+                )
+            )
+            await asyncio.sleep(wait_before_hooks)
 
         timestamp = meeting.start_time.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%S")
         base_name = f"{timestamp}-{meeting.slug()}"
@@ -100,13 +112,23 @@ class MeetingScheduler:
             transcripts_dir / f"{base_name}.txt" if transcripts_dir is not None else None
         )
 
-        started_at = datetime.now(timezone.utc)
         recorder = FFmpegRecorder(self._config.recorder)
         errors: List[str] = []
+        started_at: Optional[datetime] = None
 
         try:
             errors.extend(await self._run_commands(meeting, meeting.pre_record, "pre-record"))
+            now_utc = datetime.now(timezone.utc)
+            if now_utc < start_time_utc:
+                wait_until_start = (start_time_utc - now_utc).total_seconds()
+                logger(
+                    "Waiting {seconds:.0f}s to begin recording '{title}'...".format(
+                        seconds=wait_until_start, title=meeting.title
+                    )
+                )
+                await asyncio.sleep(wait_until_start)
             await recorder.start(record_path)
+            started_at = datetime.now(timezone.utc)
             logger(f"[{meeting.title}] Recording started -> {record_path}")
             await asyncio.sleep(meeting.duration.total_seconds())
         except asyncio.CancelledError:
@@ -144,11 +166,13 @@ class MeetingScheduler:
 
         ended_at = datetime.now(timezone.utc)
 
+        result_started_at = started_at or datetime.now(timezone.utc)
+
         return RecordingResult(
             meeting=meeting,
             media_path=record_path,
             transcript_path=transcript_path if transcript_path and transcript_path.exists() else None,
-            started_at=started_at,
+            started_at=result_started_at,
             ended_at=ended_at,
             errors=errors,
         )

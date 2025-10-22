@@ -22,6 +22,7 @@ class Meeting:
     notes: Optional[str] = None
     pre_record: List[str] = field(default_factory=list)
     post_record: List[str] = field(default_factory=list)
+    pre_record_lead_seconds: Optional[int] = None
 
     @property
     def end_time(self) -> datetime:
@@ -40,6 +41,8 @@ class Meeting:
         for command in self.post_record:
             if not isinstance(command, str) or not command.strip():
                 raise ValueError("Post-record commands must be non-empty strings")
+        if self.pre_record_lead_seconds is not None and self.pre_record_lead_seconds < 0:
+            raise ValueError("pre_record_lead_seconds must be zero or positive")
 
     def slug(self) -> str:
         """Return a filesystem friendly identifier for the meeting."""

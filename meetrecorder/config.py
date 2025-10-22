@@ -33,6 +33,7 @@ class AppConfig:
     recorder: RecorderConfig
     transcription: Optional[TranscriptionConfig]
     default_timezone: str
+    pre_record_lead_seconds: int
 
 
 def _coerce_duration(value: object) -> timedelta:
@@ -72,7 +73,9 @@ def _ensure_string_list(value: object, field: str) -> List[str]:
     return commands
 
 
-def _deserialize_meeting(raw: Dict, default_timezone: str) -> Meeting:
+def _deserialize_meeting(
+    raw: Dict, default_timezone: str, default_lead_seconds: int
+) -> Meeting:
     if "title" not in raw or "meet_url" not in raw or "start_time" not in raw:
         missing = {key for key in ("title", "meet_url", "start_time") if key not in raw}
         raise KeyError(f"Missing meeting fields: {', '.join(sorted(missing))}")
@@ -93,6 +96,20 @@ def _deserialize_meeting(raw: Dict, default_timezone: str) -> Meeting:
     pre_record = _ensure_string_list(raw.get("pre_record"), "pre_record")
     post_record = _ensure_string_list(raw.get("post_record"), "post_record")
 
+    lead_seconds_raw = raw.get("pre_record_lead_seconds")
+    lead_seconds: Optional[int]
+    if lead_seconds_raw is None:
+        lead_seconds = None
+    else:
+        try:
+            lead_seconds = int(lead_seconds_raw)
+        except (TypeError, ValueError) as exc:
+            raise TypeError(
+                "meetings[*].pre_record_lead_seconds must be an integer"
+            ) from exc
+        if lead_seconds < 0:
+            raise ValueError("meetings[*].pre_record_lead_seconds must be zero or positive")
+
     return Meeting(
         title=str(raw["title"]),
         meet_url=str(raw["meet_url"]),
@@ -103,6 +120,9 @@ def _deserialize_meeting(raw: Dict, default_timezone: str) -> Meeting:
         notes=raw.get("notes"),
         pre_record=pre_record,
         post_record=post_record,
+        pre_record_lead_seconds=lead_seconds
+        if lead_seconds is not None
+        else default_lead_seconds,
     )
 
 
@@ -218,6 +238,14 @@ def load_config(path: str | Path) -> AppConfig:
         _expand_path(base_dir, transcripts_dir_value) if transcripts_dir_value else None
     )
 
+    lead_value = settings.get("pre_record_lead_seconds", 0)
+    try:
+        default_lead_seconds = int(lead_value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError("settings.pre_record_lead_seconds must be an integer") from exc
+    if default_lead_seconds < 0:
+        raise ValueError("settings.pre_record_lead_seconds must be zero or positive")
+
     meetings_raw = data.get("meetings", []) or []
     if not isinstance(meetings_raw, Iterable):
         raise TypeError("meetings must be an iterable of mappings")
@@ -225,7 +253,7 @@ def load_config(path: str | Path) -> AppConfig:
     for entry in meetings_raw:
         if not isinstance(entry, dict):
             raise TypeError("Each meeting entry must be a mapping")
-        meetings.append(_deserialize_meeting(entry, default_timezone))
+        meetings.append(_deserialize_meeting(entry, default_timezone, default_lead_seconds))
     meetings = ensure_valid_meetings(meetings)
 
     recorder = _build_recorder(settings, base_dir)
@@ -238,6 +266,7 @@ def load_config(path: str | Path) -> AppConfig:
         recorder=recorder,
         transcription=transcription,
         default_timezone=default_timezone,
+        pre_record_lead_seconds=default_lead_seconds,
     )
 
 
@@ -249,6 +278,7 @@ def dump_template(path: str | Path) -> None:
             "timezone": "UTC",
             "recordings_dir": "recordings",
             "transcripts_dir": "transcripts",
+            "pre_record_lead_seconds": 60,
             "recorder": {
                 "ffmpeg_path": "ffmpeg",
                 "display": ":0.0",
@@ -279,6 +309,7 @@ def dump_template(path: str | Path) -> None:
                 "start_time": datetime.now().replace(microsecond=0).isoformat(),
                 "duration": "30m",
                 "timezone": "UTC",
+                "pre_record_lead_seconds": 60,
                 "participants": ["alice@example.com", "bob@example.com"],
                 "notes": "Discuss blockers and priorities.",
                 "pre_record": [

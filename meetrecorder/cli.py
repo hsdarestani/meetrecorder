@@ -45,6 +45,7 @@ def _prepare_scheduler(
         recorder=recorder_config,
         transcription=transcription_config,
         logger=_print,
+        pre_record_lead_seconds=app_config.pre_record_lead_seconds,
     )
     return MeetingScheduler(scheduler_config)
 
