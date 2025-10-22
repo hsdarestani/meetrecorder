@@ -1,0 +1,10 @@
+meetings:
+  - title: Product Sync
+    meet_url: https://meet.google.com/abc-defg-hij
+    start_time: 2024-01-01T09:00:00
+    duration: 45m
+    timezone: UTC
+    participants:
+      - product@example.com
+      - engineering@example.com
+    notes: Weekly product/engineering sync

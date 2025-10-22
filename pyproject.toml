@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meetrecorder"
+version = "0.1.0"
+description = "Automation utilities for recording Google Meet sessions and forwarding them to Telegram"
+readme = "README.md"
+authors = [{name = "Meet Recorder"}]
+requires-python = ">=3.10"
+dependencies = [
+    "typer>=0.9",
+    "PyYAML>=6.0",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+meetrecorder = "meetrecorder.cli:app"
+
+[tool.pytest.ini_options]
+addopts = "-q"
+pythonpath = ["."]
+markers = [
+    "asyncio: mark test to run with pytest-asyncio",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["meetrecorder*"]
