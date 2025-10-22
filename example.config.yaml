@@ -1,0 +1,43 @@
+settings:
+  timezone: UTC
+  recordings_dir: recordings
+  transcripts_dir: transcripts
+  pre_record_lead_seconds: 60
+  recorder:
+    ffmpeg_path: ffmpeg
+    display: ":0.0"
+    audio_source: "default"
+    video_size: "1920x1080"
+    frame_rate: 30
+    video_bitrate: "4500k"
+    audio_bitrate: "128k"
+    output_format: mp4
+    extra_output_args:
+      - -preset
+      - veryfast
+    dry_run: true
+  transcription:
+    command:
+      - whisper
+      - "{input}"
+      - --model
+      - small
+      - --output_dir
+      - "{output_dir}"
+    timeout_seconds: 900
+
+meetings:
+  - title: Weekly Sync
+    meet_url: https://meet.google.com/abc-defg-hij
+    start_time: 2024-01-01T13:55:00
+    duration: 60m
+    timezone: UTC
+    pre_record_lead_seconds: 60
+    participants:
+      - alice@example.com
+      - bob@example.com
+    notes: Join 5 minutes early so the meeting is live before recording.
+    pre_record:
+      - export DISPLAY=:0.0 && chromium --profile-directory=Default --app=https://meet.google.com/abc-defg-hij
+    post_record:
+      - pkill -f 'chromium --app=https://meet.google.com/abc-defg-hij'
