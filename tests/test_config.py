@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from meetrecorder.config import load_config
+from meetrecorder.config import AppConfig, load_config
 from meetrecorder.models import Meeting
 
 
@@ -16,22 +16,36 @@ def write_config(tmp_path: Path, data: str) -> Path:
 def test_load_config_parses_meeting(tmp_path: Path) -> None:
     now = datetime.now().replace(microsecond=0)
     config = f"""
+settings:
+  timezone: UTC
+  recordings_dir: recordings
+  recorder:
+    display: ":0.0"
+    audio_source: default
+    dry_run: true
 meetings:
   - title: Demo
     meet_url: https://meet.google.com/aaa-bbbb-ccc
     start_time: {now.isoformat()}
     duration: 45m
     timezone: UTC
-    participants:
-      - user@example.com
+    pre_record:
+      - echo preparing
+    post_record:
+      - echo cleanup
 """
     path = write_config(tmp_path, config)
-    meetings = load_config(path)
-    assert len(meetings) == 1
-    meeting = meetings[0]
+    app_config = load_config(path)
+    assert isinstance(app_config, AppConfig)
+    assert app_config.recorder.dry_run is True
+    assert app_config.recordings_dir == (tmp_path / "recordings")
+    assert len(app_config.meetings) == 1
+    meeting = app_config.meetings[0]
     assert isinstance(meeting, Meeting)
     assert meeting.title == "Demo"
     assert meeting.duration.total_seconds() == 45 * 60
+    assert meeting.pre_record == ["echo preparing"]
+    assert meeting.post_record == ["echo cleanup"]
 
 
 def test_invalid_config_missing_file(tmp_path: Path) -> None:

@@ -9,12 +9,12 @@ from pathlib import Path
 from typing import Awaitable, Callable, Iterable, List, Optional
 
 from .automation import (
-    AutomationConfig,
-    capture_transcript,
-    join_meeting,
-    launch_browser,
-    start_recording,
-    stop_recording,
+    FFmpegRecorder,
+    RecorderConfig,
+    RecorderError,
+    TranscriptionConfig,
+    TranscriptionError,
+    run_transcription,
 )
 from .models import Meeting, RecordingResult
 
@@ -22,12 +22,20 @@ from .models import Meeting, RecordingResult
 Logger = Callable[[str], None]
 
 
+def _safe_decode(data: bytes, limit: int = 400) -> str:
+    text = data.decode(errors="ignore").strip()
+    if len(text) > limit:
+        return text[:limit] + "…"
+    return text
+
+
 @dataclass(slots=True)
 class SchedulerConfig:
     recordings_dir: Path
-    transcripts_dir: Path
-    automation: AutomationConfig
+    transcripts_dir: Optional[Path]
+    recorder: RecorderConfig
     logger: Logger
+    transcription: Optional[TranscriptionConfig] = None
 
 
 class MeetingScheduler:
@@ -37,6 +45,7 @@ class MeetingScheduler:
 
     async def schedule(self, meetings: Iterable[Meeting]) -> List[RecordingResult]:
         results: List[RecordingResult] = []
+        self._tasks = []
         for meeting in meetings:
             task = asyncio.create_task(self._handle_meeting(meeting))
             self._tasks.append(task)
@@ -44,12 +53,38 @@ class MeetingScheduler:
             results.append(await task)
         return results
 
+    async def _run_commands(
+        self, meeting: Meeting, commands: Iterable[str], phase: str
+    ) -> List[str]:
+        logger = self._config.logger
+        errors: List[str] = []
+        for command in commands:
+            logger(f"[{meeting.title}] Running {phase} command: {command}")
+            process = await asyncio.create_subprocess_shell(
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await process.communicate()
+            if stdout:
+                logger(f"[{meeting.title}] {phase} stdout: {_safe_decode(stdout)}")
+            if stderr:
+                logger(f"[{meeting.title}] {phase} stderr: {_safe_decode(stderr)}")
+            if process.returncode != 0:
+                error_message = (
+                    f"{phase} command '{command}' exited with code {process.returncode}"
+                )
+                errors.append(error_message)
+                logger(f"[{meeting.title}] {error_message}")
+        return errors
+
     async def _handle_meeting(self, meeting: Meeting) -> RecordingResult:
         logger = self._config.logger
         recordings_dir = self._config.recordings_dir
         transcripts_dir = self._config.transcripts_dir
         recordings_dir.mkdir(parents=True, exist_ok=True)
-        transcripts_dir.mkdir(parents=True, exist_ok=True)
+        if transcripts_dir:
+            transcripts_dir.mkdir(parents=True, exist_ok=True)
 
         wait_seconds = (
             meeting.start_time.astimezone(timezone.utc) - datetime.now(timezone.utc)
@@ -58,36 +93,61 @@ class MeetingScheduler:
             logger(f"Waiting {wait_seconds:.0f}s for meeting '{meeting.title}' to start...")
             await asyncio.sleep(wait_seconds)
 
-        record_path = recordings_dir / f"{meeting.start_time:%Y%m%dT%H%M%S}-{meeting.title}.txt"
-        transcript_path = transcripts_dir / (
-            f"{meeting.start_time:%Y%m%dT%H%M%S}-{meeting.title}-transcript.txt"
+        timestamp = meeting.start_time.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        base_name = f"{timestamp}-{meeting.slug()}"
+        record_path = recordings_dir / f"{base_name}{self._config.recorder.extension}"
+        transcript_path = (
+            transcripts_dir / f"{base_name}.txt" if transcripts_dir is not None else None
         )
 
         started_at = datetime.now(timezone.utc)
+        recorder = FFmpegRecorder(self._config.recorder)
         errors: List[str] = []
 
         try:
-            async with launch_browser(self._config.automation) as session_id:
-                logger(f"[{meeting.title}] Browser session {session_id} launched")
-                await join_meeting(session_id, meeting.meet_url)
-                logger(f"[{meeting.title}] Joined meeting")
-                await start_recording(session_id, record_path)
-                logger(f"[{meeting.title}] Recording started -> {record_path}")
-                await asyncio.sleep(meeting.duration.total_seconds())
-                await stop_recording(session_id)
-                logger(f"[{meeting.title}] Recording stopped")
-                await capture_transcript(session_id, transcript_path)
-                logger(f"[{meeting.title}] Transcript saved -> {transcript_path}")
-        except Exception as exc:  # pragma: no cover - we still want to capture errors
+            errors.extend(await self._run_commands(meeting, meeting.pre_record, "pre-record"))
+            await recorder.start(record_path)
+            logger(f"[{meeting.title}] Recording started -> {record_path}")
+            await asyncio.sleep(meeting.duration.total_seconds())
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # pragma: no cover - capture runtime failures
             errors.append(str(exc))
             logger(f"[{meeting.title}] Error: {exc}")
         finally:
-            ended_at = datetime.now(timezone.utc)
+            try:
+                await recorder.ensure_stopped()
+                logger(f"[{meeting.title}] Recording stopped")
+            except RecorderError as exc:
+                errors.append(f"Recorder shutdown error: {exc}")
+                logger(f"[{meeting.title}] Recorder shutdown error: {exc}")
+
+            post_errors = await self._run_commands(meeting, meeting.post_record, "post-record")
+            errors.extend(post_errors)
+
+            if (
+                self._config.transcription
+                and transcript_path is not None
+                and record_path.exists()
+                and not self._config.recorder.dry_run
+            ):
+                try:
+                    await run_transcription(
+                        record_path, transcript_path, self._config.transcription
+                    )
+                    logger(
+                        f"[{meeting.title}] Transcript saved -> {transcript_path}"
+                    )
+                except TranscriptionError as exc:
+                    errors.append(f"Transcription failed: {exc}")
+                    logger(f"[{meeting.title}] Transcription failed: {exc}")
+
+        ended_at = datetime.now(timezone.utc)
 
         return RecordingResult(
             meeting=meeting,
             media_path=record_path,
-            transcript_path=transcript_path if transcript_path.exists() else None,
+            transcript_path=transcript_path if transcript_path and transcript_path.exists() else None,
             started_at=started_at,
             ended_at=ended_at,
             errors=errors,

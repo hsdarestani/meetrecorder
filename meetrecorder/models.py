@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
+import re
 from typing import Iterable, List, Optional
 
 
@@ -19,6 +20,8 @@ class Meeting:
     timezone: str
     participants: List[str] = field(default_factory=list)
     notes: Optional[str] = None
+    pre_record: List[str] = field(default_factory=list)
+    post_record: List[str] = field(default_factory=list)
 
     @property
     def end_time(self) -> datetime:
@@ -31,6 +34,20 @@ class Meeting:
             raise ValueError("Meeting URL must be an HTTPS link")
         if self.duration.total_seconds() <= 0:
             raise ValueError("Meeting duration must be positive")
+        for command in self.pre_record:
+            if not isinstance(command, str) or not command.strip():
+                raise ValueError("Pre-record commands must be non-empty strings")
+        for command in self.post_record:
+            if not isinstance(command, str) or not command.strip():
+                raise ValueError("Post-record commands must be non-empty strings")
+
+    def slug(self) -> str:
+        """Return a filesystem friendly identifier for the meeting."""
+
+        value = re.sub(r"[^A-Za-z0-9\-_. ]+", "", self.title).strip()
+        value = value.replace(" ", "-")
+        value = re.sub(r"-+", "-", value)
+        return value or "meeting"
 
 
 @dataclass(slots=True)
