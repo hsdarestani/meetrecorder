@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -8,8 +9,7 @@ from meetrecorder.models import Meeting
 from meetrecorder.scheduler import MeetingScheduler, SchedulerConfig
 
 
-@pytest.mark.asyncio
-async def test_scheduler_runs_meeting(tmp_path: Path) -> None:
+def test_scheduler_runs_meeting(tmp_path: Path) -> None:
     meeting = Meeting(
         title="Quick Sync",
         meet_url="https://meet.google.com/test",
@@ -35,18 +35,20 @@ async def test_scheduler_runs_meeting(tmp_path: Path) -> None:
         )
     )
 
-    results = await scheduler.run([meeting])
-    assert len(results) == 1
-    result = results[0]
-    assert result.media_path.exists()
-    assert result.succeeded
+    async def _run() -> None:
+        results = await scheduler.run([meeting])
+        assert len(results) == 1
+        result = results[0]
+        assert result.media_path.exists()
+        assert result.succeeded
+
+    asyncio.run(_run())
     assert any("Recording started" in entry for entry in logs)
     assert (tmp_path / "pre-hook").exists()
     assert (tmp_path / "post-hook").exists()
 
 
-@pytest.mark.asyncio
-async def test_pre_record_lead_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pre_record_lead_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     start_time = datetime.now(timezone.utc) + timedelta(seconds=0.6)
     meeting = Meeting(
         title="Future Meeting",
@@ -90,9 +92,82 @@ async def test_pre_record_lead_time(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         )
     )
 
-    results = await scheduler.run([meeting])
-    result = results[0]
+    async def _run() -> None:
+        results = await scheduler.run([meeting])
+        result = results[0]
 
-    assert (tmp_path / "pre-marker").exists()
-    delay = (result.started_at - start_time).total_seconds()
-    assert delay < 0.3  # commands should finish before start and wait until start
+        assert (tmp_path / "pre-marker").exists()
+        delay = (result.started_at - start_time).total_seconds()
+        assert delay < 0.3  # commands should finish before start and wait until start
+
+    asyncio.run(_run())
+
+
+def test_scheduler_skips_when_pre_hook_fails(tmp_path: Path) -> None:
+    meeting = Meeting(
+        title="Failing Hook",
+        meet_url="https://meet.google.com/test",
+        start_time=datetime.now(timezone.utc) - timedelta(seconds=1),
+        duration=timedelta(seconds=0.1),
+        timezone="UTC",
+        pre_record=["python -c 'import sys; sys.exit(1)'"]
+    )
+
+    logs: list[str] = []
+
+    def _logger(message: str) -> None:
+        logs.append(message)
+
+    scheduler = MeetingScheduler(
+        SchedulerConfig(
+            recordings_dir=tmp_path / "recordings",
+            transcripts_dir=None,
+            recorder=RecorderConfig(dry_run=True),
+            logger=_logger,
+            transcription=None,
+        )
+    )
+
+    async def _run() -> None:
+        results = await scheduler.run([meeting])
+        result = results[0]
+
+        assert not result.media_path.exists()
+        assert not result.succeeded
+        assert any("Skipped recording" in error for error in result.errors)
+        assert any("pre-record command" in error for error in result.errors)
+
+    asyncio.run(_run())
+    assert any("Skipped recording" in entry for entry in logs)
+
+
+def test_scheduler_continues_when_abort_disabled(tmp_path: Path) -> None:
+    meeting = Meeting(
+        title="Ignore Failure",
+        meet_url="https://meet.google.com/test",
+        start_time=datetime.now(timezone.utc) - timedelta(seconds=1),
+        duration=timedelta(seconds=0.1),
+        timezone="UTC",
+        pre_record=["python -c 'import sys; sys.exit(1)'"]
+    )
+
+    scheduler = MeetingScheduler(
+        SchedulerConfig(
+            recordings_dir=tmp_path / "recordings",
+            transcripts_dir=None,
+            recorder=RecorderConfig(dry_run=True),
+            logger=lambda _: None,
+            transcription=None,
+            abort_on_pre_record_failure=False,
+        )
+    )
+
+    async def _run() -> None:
+        results = await scheduler.run([meeting])
+        result = results[0]
+
+        assert result.media_path.exists()
+        assert any("pre-record command" in error for error in result.errors)
+        assert not any("Skipped recording" in error for error in result.errors)
+
+    asyncio.run(_run())

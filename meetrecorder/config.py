@@ -23,6 +23,21 @@ def _expand_path(base: Path, value: object) -> Path:
     return (base / path).expanduser()
 
 
+def _coerce_bool(value: object, field: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        if value in (0, 1):
+            return bool(value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"true", "yes", "on", "1"}:
+            return True
+        if text in {"false", "no", "off", "0"}:
+            return False
+    raise TypeError(f"{field} must be a boolean value")
+
+
 @dataclass(slots=True)
 class AppConfig:
     """Full application configuration returned by :func:`load_config`."""
@@ -34,6 +49,7 @@ class AppConfig:
     transcription: Optional[TranscriptionConfig]
     default_timezone: str
     pre_record_lead_seconds: int
+    abort_on_pre_record_failure: bool
 
 
 def _coerce_duration(value: object) -> timedelta:
@@ -74,7 +90,10 @@ def _ensure_string_list(value: object, field: str) -> List[str]:
 
 
 def _deserialize_meeting(
-    raw: Dict, default_timezone: str, default_lead_seconds: int
+    raw: Dict,
+    default_timezone: str,
+    default_lead_seconds: int,
+    default_abort_on_failure: bool,
 ) -> Meeting:
     if "title" not in raw or "meet_url" not in raw or "start_time" not in raw:
         missing = {key for key in ("title", "meet_url", "start_time") if key not in raw}
@@ -110,6 +129,15 @@ def _deserialize_meeting(
         if lead_seconds < 0:
             raise ValueError("meetings[*].pre_record_lead_seconds must be zero or positive")
 
+    abort_on_failure_raw = raw.get("abort_on_pre_record_failure")
+    abort_on_failure: Optional[bool]
+    if abort_on_failure_raw is None:
+        abort_on_failure = None
+    else:
+        abort_on_failure = _coerce_bool(
+            abort_on_failure_raw, "meetings[*].abort_on_pre_record_failure"
+        )
+
     return Meeting(
         title=str(raw["title"]),
         meet_url=str(raw["meet_url"]),
@@ -123,6 +151,9 @@ def _deserialize_meeting(
         pre_record_lead_seconds=lead_seconds
         if lead_seconds is not None
         else default_lead_seconds,
+        abort_on_pre_record_failure=abort_on_failure
+        if abort_on_failure is not None
+        else default_abort_on_failure,
     )
 
 
@@ -249,11 +280,23 @@ def load_config(path: str | Path) -> AppConfig:
     meetings_raw = data.get("meetings", []) or []
     if not isinstance(meetings_raw, Iterable):
         raise TypeError("meetings must be an iterable of mappings")
+    default_abort_on_failure = _coerce_bool(
+        settings.get("abort_on_pre_record_failure", True),
+        "settings.abort_on_pre_record_failure",
+    )
+
     meetings: List[Meeting] = []
     for entry in meetings_raw:
         if not isinstance(entry, dict):
             raise TypeError("Each meeting entry must be a mapping")
-        meetings.append(_deserialize_meeting(entry, default_timezone, default_lead_seconds))
+        meetings.append(
+            _deserialize_meeting(
+                entry,
+                default_timezone,
+                default_lead_seconds,
+                default_abort_on_failure,
+            )
+        )
     meetings = ensure_valid_meetings(meetings)
 
     recorder = _build_recorder(settings, base_dir)
@@ -267,6 +310,7 @@ def load_config(path: str | Path) -> AppConfig:
         transcription=transcription,
         default_timezone=default_timezone,
         pre_record_lead_seconds=default_lead_seconds,
+        abort_on_pre_record_failure=default_abort_on_failure,
     )
 
 
@@ -279,6 +323,7 @@ def dump_template(path: str | Path) -> None:
             "recordings_dir": "recordings",
             "transcripts_dir": "transcripts",
             "pre_record_lead_seconds": 60,
+            "abort_on_pre_record_failure": True,
             "recorder": {
                 "ffmpeg_path": "ffmpeg",
                 "display": ":0.0",
@@ -313,7 +358,7 @@ def dump_template(path: str | Path) -> None:
                 "participants": ["alice@example.com", "bob@example.com"],
                 "notes": "Discuss blockers and priorities.",
                 "pre_record": [
-                    "export DISPLAY=:0.0 && chromium --profile-directory=Default --app=https://meet.google.com/abc-defg-hij"
+                    "export DISPLAY=:0.0 && chromium --no-sandbox --profile-directory=Default --app=https://meet.google.com/abc-defg-hij"
                 ],
                 "post_record": ["pkill -f 'chromium --app=https://meet.google.com/abc-defg-hij'"]
             }

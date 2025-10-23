@@ -3,6 +3,7 @@ settings:
   recordings_dir: recordings
   transcripts_dir: transcripts
   pre_record_lead_seconds: 60
+  abort_on_pre_record_failure: true
   recorder:
     ffmpeg_path: ffmpeg
     display: ":0.0"
@@ -38,6 +39,6 @@ meetings:
       - bob@example.com
     notes: Join 5 minutes early so the meeting is live before recording.
     pre_record:
-      - export DISPLAY=:0.0 && chromium --profile-directory=Default --app=https://meet.google.com/abc-defg-hij
+      - export DISPLAY=:0.0 && chromium --no-sandbox --profile-directory=Default --app=https://meet.google.com/abc-defg-hij
     post_record:
       - pkill -f 'chromium --app=https://meet.google.com/abc-defg-hij'

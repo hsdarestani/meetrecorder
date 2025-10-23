@@ -85,6 +85,10 @@ pip install --upgrade openai-whisper
    can sign in to Google and allow microphone/camera permissions. Keep the profile directory for
    reuse by the scheduler.
 
+   > Chromium refuses to start as root unless you add `--no-sandbox`. The recommended approach is
+   > to run Meet Recorder as a dedicated non-root user (step 1). If you must run as root, append
+   > `--no-sandbox` to every Chromium command in your configuration.
+
 5. **Generate and edit the configuration.**
    ```bash
    meetrecorder generate-config config.yaml
@@ -97,10 +101,14 @@ pip install --upgrade openai-whisper
    - Set `settings.recorder.audio_source` to your PulseAudio monitor (for example
      `meetrecorder_sink.monitor`).
    - Flip `settings.recorder.dry_run` to `false` once you have tested.
+   - Leave `settings.abort_on_pre_record_failure` enabled so recordings are skipped whenever a
+     pre-record hook fails. Disable it only if you intentionally want the recorder to continue even
+     when automation cannot join the call.
    - Add `pre_record` commands that open the meeting a little before the start time, for example:
      ```yaml
      pre_record:
        - export DISPLAY=:99 && chromium \
+           --no-sandbox \
            --user-data-dir=$HOME/.config/meetrecorder-chrome \
            --profile-directory=Default \
            --app=https://meet.google.com/abc-defg-hij
@@ -138,6 +146,8 @@ pip install --upgrade openai-whisper
   are resolved against the configuration file location.
 - `settings.pre_record_lead_seconds` – how many seconds before the scheduled start the
   `pre_record` commands should run. Increase this if the browser needs more time to join.
+- `settings.abort_on_pre_record_failure` – when `true` (default) the scheduler will skip the
+  recording entirely if any pre-record hook fails.
 - `settings.recorder` – FFmpeg options. Important keys are `display`, `audio_source`,
   `video_size`, and `dry_run`.
 - `settings.transcription` – optional command to run after recording. Use `{input}` for the media

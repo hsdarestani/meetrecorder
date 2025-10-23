@@ -37,6 +37,7 @@ class SchedulerConfig:
     logger: Logger
     transcription: Optional[TranscriptionConfig] = None
     pre_record_lead_seconds: int = 0
+    abort_on_pre_record_failure: bool = True
 
 
 class MeetingScheduler:
@@ -115,22 +116,37 @@ class MeetingScheduler:
         recorder = FFmpegRecorder(self._config.recorder)
         errors: List[str] = []
         started_at: Optional[datetime] = None
+        record_started = False
 
         try:
-            errors.extend(await self._run_commands(meeting, meeting.pre_record, "pre-record"))
-            now_utc = datetime.now(timezone.utc)
-            if now_utc < start_time_utc:
-                wait_until_start = (start_time_utc - now_utc).total_seconds()
-                logger(
-                    "Waiting {seconds:.0f}s to begin recording '{title}'...".format(
-                        seconds=wait_until_start, title=meeting.title
+            pre_errors = await self._run_commands(meeting, meeting.pre_record, "pre-record")
+            errors.extend(pre_errors)
+
+            abort_on_failure = (
+                meeting.abort_on_pre_record_failure
+                if meeting.abort_on_pre_record_failure is not None
+                else self._config.abort_on_pre_record_failure
+            )
+
+            if pre_errors and abort_on_failure:
+                skip_message = "Skipped recording because a pre-record command failed."
+                errors.append(skip_message)
+                logger(f"[{meeting.title}] {skip_message}")
+            else:
+                now_utc = datetime.now(timezone.utc)
+                if now_utc < start_time_utc:
+                    wait_until_start = (start_time_utc - now_utc).total_seconds()
+                    logger(
+                        "Waiting {seconds:.0f}s to begin recording '{title}'...".format(
+                            seconds=wait_until_start, title=meeting.title
+                        )
                     )
-                )
-                await asyncio.sleep(wait_until_start)
-            await recorder.start(record_path)
-            started_at = datetime.now(timezone.utc)
-            logger(f"[{meeting.title}] Recording started -> {record_path}")
-            await asyncio.sleep(meeting.duration.total_seconds())
+                    await asyncio.sleep(wait_until_start)
+                await recorder.start(record_path)
+                record_started = True
+                started_at = datetime.now(timezone.utc)
+                logger(f"[{meeting.title}] Recording started -> {record_path}")
+                await asyncio.sleep(meeting.duration.total_seconds())
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # pragma: no cover - capture runtime failures
@@ -139,7 +155,8 @@ class MeetingScheduler:
         finally:
             try:
                 await recorder.ensure_stopped()
-                logger(f"[{meeting.title}] Recording stopped")
+                if record_started:
+                    logger(f"[{meeting.title}] Recording stopped")
             except RecorderError as exc:
                 errors.append(f"Recorder shutdown error: {exc}")
                 logger(f"[{meeting.title}] Recorder shutdown error: {exc}")
@@ -152,6 +169,7 @@ class MeetingScheduler:
                 and transcript_path is not None
                 and record_path.exists()
                 and not self._config.recorder.dry_run
+                and record_started
             ):
                 try:
                     await run_transcription(

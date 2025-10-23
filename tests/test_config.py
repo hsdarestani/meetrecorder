@@ -20,6 +20,7 @@ settings:
   timezone: UTC
   recordings_dir: recordings
   pre_record_lead_seconds: 45
+  abort_on_pre_record_failure: true
   recorder:
     display: ":0.0"
     audio_source: default
@@ -31,6 +32,7 @@ meetings:
     duration: 45m
     timezone: UTC
     pre_record_lead_seconds: 15
+    abort_on_pre_record_failure: false
     pre_record:
       - echo preparing
     post_record:
@@ -42,6 +44,7 @@ meetings:
     assert app_config.recorder.dry_run is True
     assert app_config.recordings_dir == (tmp_path / "recordings")
     assert app_config.pre_record_lead_seconds == 45
+    assert app_config.abort_on_pre_record_failure is True
     assert len(app_config.meetings) == 1
     meeting = app_config.meetings[0]
     assert isinstance(meeting, Meeting)
@@ -50,6 +53,7 @@ meetings:
     assert meeting.pre_record == ["echo preparing"]
     assert meeting.post_record == ["echo cleanup"]
     assert meeting.pre_record_lead_seconds == 15
+    assert meeting.abort_on_pre_record_failure is False
 
 
 def test_invalid_config_missing_file(tmp_path: Path) -> None:
